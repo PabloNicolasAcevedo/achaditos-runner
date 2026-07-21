@@ -142,6 +142,15 @@ jobs:
           git add data/prices.csv data/latest.json docs/data/exchange-history.json
           [ -d data/archive ] && git add data/archive/ || true
           [ -f data/partial-runs.json ] && git add data/partial-runs.json || true
+          # docs/data/latest.json y price-alert-health.json (issue #104,
+          # 2026-07-21): lib/buildLatest.js los escribe SIEMPRE (con
+          # timestamp nuevo cada corrida, así que siempre difieren) pero
+          # nunca estaban en este commit -- mismo síntoma que el bug de
+          # abajo, agravado porque acá casi nunca hay nada que rebasear
+          # de verdad para notarlo.
+          [ -f docs/data/latest.json ] && git add docs/data/latest.json || true
+          [ -f data/price-alert-health.json ] && git add data/price-alert-health.json || true
+          [ -f docs/data/price-alert-health.json ] && git add docs/data/price-alert-health.json || true
           # index.js llama a postPriceAlerts.js SIEMPRE (SKIP_WHATSAPP solo
           # saltea la conexión, no el guardado de estado) -- issue #104,
           # 2026-07-21: sin stagear estos 4 archivos, quedaban modificados
