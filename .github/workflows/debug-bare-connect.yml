@@ -1,0 +1,43 @@
+name: "[temporal] Test de conexión desnuda a Postgres"
+
+# TEMPORAL (issue #104, 2026-07-21, BORRAR después de usar): index.js falla
+# consistentemente con (EAUTHQUERY)/(ECIRCUITBREAKER) desde este repo
+# público, incluso con host/puerto/usuario/database/sslmode/password
+# IDÉNTICOS a los que usa el repo privado con éxito. Este workflow aísla la
+# variable que queda: ¿es la red de runners de repos públicos la que
+# Supabase trata distinto? Una sola conexión, un SELECT 1, nada más.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Instalar pg
+        run: npm install pg@8
+
+      - name: Conexión desnuda (SELECT 1)
+        env:
+          PGHOST: ${{ secrets.PGHOST }}
+          PGPORT: ${{ secrets.PGPORT }}
+          PGUSER: ${{ secrets.PGUSER }}
+          PGPASSWORD: ${{ secrets.PGPASSWORD }}
+          PGDATABASE: ${{ secrets.PGDATABASE }}
+          PGSSLMODE: ${{ secrets.PGSSLMODE }}
+        run: |
+          node -e "
+          const { Pool } = require('pg');
+          const pool = new Pool({ ssl: { rejectUnauthorized: false } });
+          pool.query('SELECT 1 as ok, now() as ts')
+            .then(r => { console.log('CONEXION OK:', JSON.stringify(r.rows)); pool.end(); })
+            .catch(e => { console.error('CONEXION FALLO:', e.message); pool.end(); process.exit(1); });
+          "
