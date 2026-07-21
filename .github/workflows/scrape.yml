@@ -230,11 +230,14 @@ jobs:
       - name: Rotar historial de precios si el CSV activo creció demasiado
         run: node scripts/rotatePricesCsv.js
 
-      # Sin archivos de WhatsApp en el commit (alertas/sesión no corren acá,
-      # ver header). El pull --rebase protege contra el único solapamiento
-      # posible que quedó: retry-whatsapp-alerts.yml (repo privado) pushea
-      # archivos de estado de alertas -- son archivos disjuntos de estos, el
-      # rebase es limpio.
+      # CORRECCIÓN (issue #104, 2026-07-21): a diferencia de lo que decía este
+      # comentario antes, index.js SÍ toca archivos de alertas acá -- llama a
+      # postPriceAlerts.js SIEMPRE (SKIP_WHATSAPP solo excluye la conexión de
+      # WhatsApp, no ese paso). Sin conexión, ese script igual persiste
+      # estado (recuperaciones de precio, limpieza de fallos) en los 4
+      # archivos de abajo. Sin stagearlos quedaban modificados sin commitear
+      # y el "git pull --rebase" de más abajo fallaba con "unstaged changes",
+      # tumbando el commit real de precios también.
       - name: Commit results
         run: |
           git config user.name "brasil-precios-bot"
@@ -242,6 +245,10 @@ jobs:
           git add data/prices.csv data/latest.json docs/data/exchange-history.json
           [ -d data/archive ] && git add data/archive/ || true
           [ -f data/partial-runs.json ] && git add data/partial-runs.json || true
+          [ -f data/price-alert-state.json ] && git add data/price-alert-state.json || true
+          [ -f data/whatsapp-alert-failures.json ] && git add data/whatsapp-alert-failures.json || true
+          [ -f docs/data/price-alert-state.json ] && git add docs/data/price-alert-state.json || true
+          [ -f docs/data/whatsapp-alert-failures.json ] && git add docs/data/whatsapp-alert-failures.json || true
           git add -A -- data/pg-write-failures.json 2>/dev/null || true
           git diff --cached --quiet && echo "Sin cambios" && exit 0
           git commit -m "Actualiza precios $(date -u +%Y-%m-%dT%H:%M:%SZ)"

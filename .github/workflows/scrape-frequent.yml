@@ -142,6 +142,15 @@ jobs:
           git add data/prices.csv data/latest.json docs/data/exchange-history.json
           [ -d data/archive ] && git add data/archive/ || true
           [ -f data/partial-runs.json ] && git add data/partial-runs.json || true
+          # index.js llama a postPriceAlerts.js SIEMPRE (SKIP_WHATSAPP solo
+          # saltea la conexión, no el guardado de estado) -- issue #104,
+          # 2026-07-21: sin stagear estos 4 archivos, quedaban modificados
+          # sin commitear y "git pull --rebase" de más abajo fallaba con
+          # "unstaged changes", tumbando el commit real de precios también.
+          [ -f data/price-alert-state.json ] && git add data/price-alert-state.json || true
+          [ -f data/whatsapp-alert-failures.json ] && git add data/whatsapp-alert-failures.json || true
+          [ -f docs/data/price-alert-state.json ] && git add docs/data/price-alert-state.json || true
+          [ -f docs/data/whatsapp-alert-failures.json ] && git add docs/data/whatsapp-alert-failures.json || true
           git add -A -- data/pg-write-failures.json 2>/dev/null || true
           git diff --cached --quiet && echo "Sin cambios" && exit 0
           git commit -m "Actualiza precios (sin WhatsApp) $(date -u +%Y-%m-%dT%H:%M:%SZ)"
