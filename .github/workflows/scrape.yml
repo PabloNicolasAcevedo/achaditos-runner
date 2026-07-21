@@ -1,0 +1,240 @@
+name: Scrape Brazilian product prices
+
+# REPO RUNNER PÚBLICO (issue #104 del repo privado): este repo existe SOLO
+# para ejecutar los crons de scraping con los minutos ilimitados que GitHub
+# da a los repos públicos. No tiene código de negocio: hace checkout del
+# repo privado (PabloNicolasAcevedo/brasil-precios-ba) con un PAT de solo
+# ese repo (secret PRIVATE_REPO_TOKEN) y corre los mismos pasos que corría
+# el workflow original ahí. Uso legítimo de automatización de un negocio
+# real, no minute-farming.
+#
+# DIFERENCIA DELIBERADA con el scrape.yml original del repo privado: acá NO
+# se pasa WHATSAPP_SESSION_PASSPHRASE. Todo lo que toca la sesión de
+# WhatsApp (alertas, sesión encriptada, passphrase) se queda en los
+# workflows del repo privado -- postPriceAlerts.js detecta la ausencia de
+# la passphrase y se saltea el envío SIN persistir estado, y el workflow
+# retry-whatsapp-alerts.yml del repo privado (corre cada 30 min con
+# early-exit barato) levanta y envía esas alertas a los pocos minutos.
+# Esto también elimina la necesidad del concurrency group compartido con
+# ese workflow: estas corridas ya no compiten por la sesión de WhatsApp.
+#
+# Si se cambia un cron acá: actualizar web/lib/admin/scrapeSchedule.ts del
+# repo privado (panel "Próxima corrida" de /admin/scrapers) -- espeja estos
+# horarios a mano.
+
+on:
+  schedule:
+    # UTC times chosen so runs land at ~06:20 and ~18:20 Argentina time (ART = UTC-3).
+    # Minute offset (:17, not :00) to avoid GitHub's known top-of-hour scheduling congestion.
+    - cron: "17 9 * * *"
+    - cron: "17 21 * * *"
+  workflow_dispatch: {}
+
+# Permisos del GITHUB_TOKEN de ESTE repo (el público) -- no se usa para
+# nada: el push de datos y los issues de salud van al repo privado vía
+# PRIVATE_REPO_TOKEN. Read-only a propósito.
+permissions:
+  contents: read
+
+concurrency:
+  group: scrape-brasil-precios
+  cancel-in-progress: false
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: PabloNicolasAcevedo/brasil-precios-ba
+          token: ${{ secrets.PRIVATE_REPO_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      # SKIP_WHATSAPP + RUN_KIND=full: mismos flags y motivos que el
+      # workflow original -- ver el comentario largo en
+      # .github/workflows/scrape.yml del repo privado (2026-07-21).
+      - name: Run scraper
+        env:
+          SKIP_WHATSAPP: "1"
+          RUN_KIND: "full"
+          PGHOST: ${{ secrets.PGHOST }}
+          PGPORT: ${{ secrets.PGPORT }}
+          PGDATABASE: ${{ secrets.PGDATABASE }}
+          PGUSER: ${{ secrets.PGUSER }}
+          PGPASSWORD: ${{ secrets.PGPASSWORD }}
+          PGSSLMODE: ${{ secrets.PGSSLMODE }}
+        run: node index.js
+
+      - name: Barrer productos bloqueados por término
+        continue-on-error: true
+        env:
+          PGHOST: ${{ secrets.PGHOST }}
+          PGPORT: ${{ secrets.PGPORT }}
+          PGDATABASE: ${{ secrets.PGDATABASE }}
+          PGUSER: ${{ secrets.PGUSER }}
+          PGPASSWORD: ${{ secrets.PGPASSWORD }}
+          PGSSLMODE: ${{ secrets.PGSSLMODE }}
+        run: node scripts/purgeBlocklistedSkus.js
+
+      - name: Cuarentenar SKUs zombie (precio congelado absurdo)
+        continue-on-error: true
+        env:
+          PGHOST: ${{ secrets.PGHOST }}
+          PGPORT: ${{ secrets.PGPORT }}
+          PGDATABASE: ${{ secrets.PGDATABASE }}
+          PGUSER: ${{ secrets.PGUSER }}
+          PGPASSWORD: ${{ secrets.PGPASSWORD }}
+          PGSSLMODE: ${{ secrets.PGSSLMODE }}
+        run: node scripts/quarantineZombieSkus.js --apply
+
+      - name: Sincronizar imágenes de producto a R2
+        continue-on-error: true
+        env:
+          PGHOST: ${{ secrets.PGHOST }}
+          PGPORT: ${{ secrets.PGPORT }}
+          PGDATABASE: ${{ secrets.PGDATABASE }}
+          PGUSER: ${{ secrets.PGUSER }}
+          PGPASSWORD: ${{ secrets.PGPASSWORD }}
+          PGSSLMODE: ${{ secrets.PGSSLMODE }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_PUBLIC_BASE_URL: ${{ secrets.R2_PUBLIC_BASE_URL }}
+        run: node scripts/syncImagesToR2.js
+
+      - name: Actualizar snapshot de Postgres (web/)
+        continue-on-error: true
+        env:
+          PGHOST: ${{ secrets.PGHOST }}
+          PGPORT: ${{ secrets.PGPORT }}
+          PGDATABASE: ${{ secrets.PGDATABASE }}
+          PGUSER: ${{ secrets.PGUSER }}
+          PGPASSWORD: ${{ secrets.PGPASSWORD }}
+          PGSSLMODE: ${{ secrets.PGSSLMODE }}
+          R2_PUBLIC_BASE_URL: ${{ secrets.R2_PUBLIC_BASE_URL }}
+        run: node scripts/build-snapshot-postgres.js
+
+      - name: Sincronizar catálogo curado (config/*.json -> Postgres)
+        continue-on-error: true
+        env:
+          PGHOST: ${{ secrets.PGHOST }}
+          PGPORT: ${{ secrets.PGPORT }}
+          PGDATABASE: ${{ secrets.PGDATABASE }}
+          PGUSER: ${{ secrets.PGUSER }}
+          PGPASSWORD: ${{ secrets.PGPASSWORD }}
+          PGSSLMODE: ${{ secrets.PGSSLMODE }}
+        run: node scripts/sync-catalog-postgres.js
+
+      - name: Sincronizar matching cross-tienda (sku_product_map)
+        continue-on-error: true
+        env:
+          PGHOST: ${{ secrets.PGHOST }}
+          PGPORT: ${{ secrets.PGPORT }}
+          PGDATABASE: ${{ secrets.PGDATABASE }}
+          PGUSER: ${{ secrets.PGUSER }}
+          PGPASSWORD: ${{ secrets.PGPASSWORD }}
+          PGSSLMODE: ${{ secrets.PGSSLMODE }}
+        run: node scripts/sync-matching-postgres.js
+
+      - name: Avisar de SKUs huérfanos nuevos por cambio de external_id (issue #76/#77)
+        env:
+          PGHOST: ${{ secrets.PGHOST }}
+          PGPORT: ${{ secrets.PGPORT }}
+          PGDATABASE: ${{ secrets.PGDATABASE }}
+          PGUSER: ${{ secrets.PGUSER }}
+          PGPASSWORD: ${{ secrets.PGPASSWORD }}
+          PGSSLMODE: ${{ secrets.PGSSLMODE }}
+        run: node scripts/checkSkuIdentityChurn.js
+
+      # GITHUB_TOKEN acá es el PAT del repo privado y NOTIFY_REPO apunta los
+      # issues de salud a ese repo -- sin esto se crearían en este repo
+      # público (GITHUB_REPOSITORY del runner), expuestos a cualquiera.
+      - name: Avisar si una alerta quedó trabada
+        env:
+          GITHUB_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+          NOTIFY_REPO: PabloNicolasAcevedo/brasil-precios-ba
+          PGHOST: ${{ secrets.PGHOST }}
+          PGPORT: ${{ secrets.PGPORT }}
+          PGDATABASE: ${{ secrets.PGDATABASE }}
+          PGUSER: ${{ secrets.PGUSER }}
+          PGPASSWORD: ${{ secrets.PGPASSWORD }}
+          PGSSLMODE: ${{ secrets.PGSSLMODE }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          NOTIFY_EMAIL_FROM: ${{ secrets.NOTIFY_EMAIL_FROM }}
+          NOTIFY_FALLBACK_EMAIL: ${{ secrets.NOTIFY_FALLBACK_EMAIL }}
+        run: node scripts/checkAlertHealth.js
+
+      - name: Avisar si la escritura a Postgres quedó trabada
+        env:
+          GITHUB_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+          NOTIFY_REPO: PabloNicolasAcevedo/brasil-precios-ba
+          PGHOST: ${{ secrets.PGHOST }}
+          PGPORT: ${{ secrets.PGPORT }}
+          PGDATABASE: ${{ secrets.PGDATABASE }}
+          PGUSER: ${{ secrets.PGUSER }}
+          PGPASSWORD: ${{ secrets.PGPASSWORD }}
+          PGSSLMODE: ${{ secrets.PGSSLMODE }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          NOTIFY_EMAIL_FROM: ${{ secrets.NOTIFY_EMAIL_FROM }}
+          NOTIFY_FALLBACK_EMAIL: ${{ secrets.NOTIFY_FALLBACK_EMAIL }}
+        run: node scripts/checkPgHealth.js
+
+      - name: Avisar si una tienda dejó de scrapear
+        env:
+          PGHOST: ${{ secrets.PGHOST }}
+          PGPORT: ${{ secrets.PGPORT }}
+          PGDATABASE: ${{ secrets.PGDATABASE }}
+          PGUSER: ${{ secrets.PGUSER }}
+          PGPASSWORD: ${{ secrets.PGPASSWORD }}
+          PGSSLMODE: ${{ secrets.PGSSLMODE }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          NOTIFY_EMAIL_FROM: ${{ secrets.NOTIFY_EMAIL_FROM }}
+          NOTIFY_FALLBACK_EMAIL: ${{ secrets.NOTIFY_FALLBACK_EMAIL }}
+        run: node scripts/checkScraperHealth.js
+
+      - name: Avisar si los datos de esta corrida se ven anómalos (issue #60)
+        env:
+          PGHOST: ${{ secrets.PGHOST }}
+          PGPORT: ${{ secrets.PGPORT }}
+          PGDATABASE: ${{ secrets.PGDATABASE }}
+          PGUSER: ${{ secrets.PGUSER }}
+          PGPASSWORD: ${{ secrets.PGPASSWORD }}
+          PGSSLMODE: ${{ secrets.PGSSLMODE }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          NOTIFY_EMAIL_FROM: ${{ secrets.NOTIFY_EMAIL_FROM }}
+          NOTIFY_FALLBACK_EMAIL: ${{ secrets.NOTIFY_FALLBACK_EMAIL }}
+        run: node scripts/checkDataAnomalies.js
+
+      # Issue #90-CSV: data/prices.csv es append-only y tiene límite duro de
+      # GitHub de 100MB -- ver scripts/rotatePricesCsv.js.
+      - name: Rotar historial de precios si el CSV activo creció demasiado
+        run: node scripts/rotatePricesCsv.js
+
+      # Sin archivos de WhatsApp en el commit (alertas/sesión no corren acá,
+      # ver header). El pull --rebase protege contra el único solapamiento
+      # posible que quedó: retry-whatsapp-alerts.yml (repo privado) pushea
+      # archivos de estado de alertas -- son archivos disjuntos de estos, el
+      # rebase es limpio.
+      - name: Commit results
+        run: |
+          git config user.name "brasil-precios-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add data/prices.csv data/latest.json docs/data/exchange-history.json
+          [ -d data/archive ] && git add data/archive/ || true
+          [ -f data/partial-runs.json ] && git add data/partial-runs.json || true
+          git add -A -- data/pg-write-failures.json 2>/dev/null || true
+          git diff --cached --quiet && echo "Sin cambios" && exit 0
+          git commit -m "Actualiza precios $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          git pull --rebase || { git rebase --abort; echo "Rebase falló, se reintenta en la próxima corrida"; exit 1; }
+          git push
