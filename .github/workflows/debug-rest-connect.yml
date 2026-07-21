@@ -12,6 +12,9 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: HTTP reachability al gateway REST (curl)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
         run: |
           echo "Probando alcance de red a $SUPABASE_URL/rest/v1/ ..."
           code=$(curl -sS -o /tmp/body.txt -w "%{http_code}" --max-time 15 "$SUPABASE_URL/rest/v1/" -H "apikey: $SUPABASE_PUBLISHABLE_KEY")
@@ -19,6 +22,9 @@ jobs:
           cat /tmp/body.txt
 
       - name: SELECT real contra una tabla (fetch nativo, sin supabase-js -- evita el crash del cliente Realtime en Node 20)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
         run: |
           node -e '
           fetch(process.env.SUPABASE_URL + "/rest/v1/stores?select=id&limit=1", {
@@ -34,6 +40,3 @@ jobs:
             console.log("FALLO DE RED/CONEXION:", err.code || err.message);
           });
           '
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
