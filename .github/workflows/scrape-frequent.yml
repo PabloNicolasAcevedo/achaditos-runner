@@ -5,6 +5,15 @@ name: Scrape prices (sin WhatsApp, mas frecuente)
 # el subconjunto frecuente (5 corridas/día, sin WhatsApp ni snapshot del
 # sitio): precios/stock más frescos entre corridas completas.
 #
+# ARQUITECTURA HÍBRIDA (issue #104, 2026-07-21): este repo NO conecta a
+# Postgres -- runners de repos públicos de GitHub reciben (EAUTHQUERY)/
+# (ECIRCUITBREAKER) persistentes del pooler de Supabase, descartado todo lo
+# demás (credenciales, puerto, red, restricciones de Supabase). En vez de
+# eso, QUEUE_PG_WRITES=1 hace que lib/store.js encole rows/runsMeta en
+# data/pg-write-queue.json, que se commitea igual que el resto -- el
+# workflow sync-runner-data-to-pg.yml del repo PRIVADO lo reproduce ahí
+# (conexión ya probada) apenas ve ese archivo en un push.
+#
 # Si se cambia un cron acá: actualizar web/lib/admin/scrapeSchedule.ts del
 # repo privado (panel "Próxima corrida" de /admin/scrapers).
 
@@ -44,92 +53,19 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Sin PGHOST/PGPORT/etc acá a propósito -- QUEUE_PG_WRITES=1 encola en
+      # vez de intentar conectar (ver header). Los chequeos de salud que
+      # necesitan Postgres (checkPgHealth/checkScraperHealth/
+      # checkDataAnomalies) se movieron al workflow del repo privado.
+      # purgeBlocklistedSkus.js / quarantineZombieSkus.js NO están acá --
+      # necesitan conexión DIRECTA a Postgres (no pasan por la cola de
+      # QUEUE_PG_WRITES), así que fallarían igual que el resto. Se movieron
+      # al workflow sync-runner-data-to-pg.yml del repo privado.
       - name: Run scraper (sin WhatsApp)
         env:
           SKIP_WHATSAPP: "1"
-          PGHOST: ${{ secrets.PGHOST }}
-          PGPORT: ${{ secrets.PGPORT }}
-          PGDATABASE: ${{ secrets.PGDATABASE }}
-          PGUSER: ${{ secrets.PGUSER }}
-          PGPASSWORD: ${{ secrets.PGPASSWORD }}
-          PGSSLMODE: ${{ secrets.PGSSLMODE }}
+          QUEUE_PG_WRITES: "1"
         run: node index.js
-
-      - name: Barrer productos bloqueados por término
-        continue-on-error: true
-        env:
-          PGHOST: ${{ secrets.PGHOST }}
-          PGPORT: ${{ secrets.PGPORT }}
-          PGDATABASE: ${{ secrets.PGDATABASE }}
-          PGUSER: ${{ secrets.PGUSER }}
-          PGPASSWORD: ${{ secrets.PGPASSWORD }}
-          PGSSLMODE: ${{ secrets.PGSSLMODE }}
-        run: node scripts/purgeBlocklistedSkus.js
-
-      - name: Cuarentenar SKUs zombie (precio congelado absurdo)
-        continue-on-error: true
-        env:
-          PGHOST: ${{ secrets.PGHOST }}
-          PGPORT: ${{ secrets.PGPORT }}
-          PGDATABASE: ${{ secrets.PGDATABASE }}
-          PGUSER: ${{ secrets.PGUSER }}
-          PGPASSWORD: ${{ secrets.PGPASSWORD }}
-          PGSSLMODE: ${{ secrets.PGSSLMODE }}
-        run: node scripts/quarantineZombieSkus.js --apply
-
-      # GITHUB_TOKEN = PAT del privado + NOTIFY_REPO: los issues de salud van
-      # al repo privado, no a este repo público -- ver scrape.yml.
-      #
-      # continue-on-error en los 3 chequeos de salud de abajo (issue #104,
-      # 2026-07-21): son scripts de NOTIFICACIÓN, no del pipeline de datos --
-      # si cualquiera falla por lo que sea (ej. un circuit breaker transitorio
-      # del pooler de Supabase), no tiene sentido que tumben el resto de la
-      # corrida y, sobre todo, que le impidan al step "Commit results" de más
-      # abajo persistir los precios ya scrapeados. Mismo criterio que ya
-      # tenían "Barrer productos bloqueados" y "Cuarentenar SKUs zombie".
-      - name: Avisar si la escritura a Postgres quedó trabada
-        continue-on-error: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
-          NOTIFY_REPO: PabloNicolasAcevedo/brasil-precios-ba
-          PGHOST: ${{ secrets.PGHOST }}
-          PGPORT: ${{ secrets.PGPORT }}
-          PGDATABASE: ${{ secrets.PGDATABASE }}
-          PGUSER: ${{ secrets.PGUSER }}
-          PGPASSWORD: ${{ secrets.PGPASSWORD }}
-          PGSSLMODE: ${{ secrets.PGSSLMODE }}
-          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
-          NOTIFY_EMAIL_FROM: ${{ secrets.NOTIFY_EMAIL_FROM }}
-          NOTIFY_FALLBACK_EMAIL: ${{ secrets.NOTIFY_FALLBACK_EMAIL }}
-        run: node scripts/checkPgHealth.js
-
-      - name: Avisar si una tienda dejó de scrapear
-        continue-on-error: true
-        env:
-          PGHOST: ${{ secrets.PGHOST }}
-          PGPORT: ${{ secrets.PGPORT }}
-          PGDATABASE: ${{ secrets.PGDATABASE }}
-          PGUSER: ${{ secrets.PGUSER }}
-          PGPASSWORD: ${{ secrets.PGPASSWORD }}
-          PGSSLMODE: ${{ secrets.PGSSLMODE }}
-          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
-          NOTIFY_EMAIL_FROM: ${{ secrets.NOTIFY_EMAIL_FROM }}
-          NOTIFY_FALLBACK_EMAIL: ${{ secrets.NOTIFY_FALLBACK_EMAIL }}
-        run: node scripts/checkScraperHealth.js
-
-      - name: Avisar si los datos de esta corrida se ven anómalos (issue #60)
-        continue-on-error: true
-        env:
-          PGHOST: ${{ secrets.PGHOST }}
-          PGPORT: ${{ secrets.PGPORT }}
-          PGDATABASE: ${{ secrets.PGDATABASE }}
-          PGUSER: ${{ secrets.PGUSER }}
-          PGPASSWORD: ${{ secrets.PGPASSWORD }}
-          PGSSLMODE: ${{ secrets.PGSSLMODE }}
-          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
-          NOTIFY_EMAIL_FROM: ${{ secrets.NOTIFY_EMAIL_FROM }}
-          NOTIFY_FALLBACK_EMAIL: ${{ secrets.NOTIFY_FALLBACK_EMAIL }}
-        run: node scripts/checkDataAnomalies.js
 
       # Issue #90-CSV: ver scripts/rotatePricesCsv.js (límite duro 100MB).
       - name: Rotar historial de precios si el CSV activo creció demasiado
@@ -142,27 +78,17 @@ jobs:
           git add data/prices.csv data/latest.json docs/data/exchange-history.json
           [ -d data/archive ] && git add data/archive/ || true
           [ -f data/partial-runs.json ] && git add data/partial-runs.json || true
-          # docs/data/latest.json y price-alert-health.json (issue #104,
-          # 2026-07-21): lib/buildLatest.js los escribe SIEMPRE (con
-          # timestamp nuevo cada corrida, así que siempre difieren) pero
-          # nunca estaban en este commit -- mismo síntoma que el bug de
-          # abajo, agravado porque acá casi nunca hay nada que rebasear
-          # de verdad para notarlo.
           [ -f docs/data/latest.json ] && git add docs/data/latest.json || true
           [ -f data/price-alert-health.json ] && git add data/price-alert-health.json || true
           [ -f docs/data/price-alert-health.json ] && git add docs/data/price-alert-health.json || true
-          # index.js llama a postPriceAlerts.js SIEMPRE (SKIP_WHATSAPP solo
-          # saltea la conexión, no el guardado de estado) -- issue #104,
-          # 2026-07-21: sin stagear estos 4 archivos, quedaban modificados
-          # sin commitear y "git pull --rebase" de más abajo fallaba con
-          # "unstaged changes", tumbando el commit real de precios también.
           [ -f data/price-alert-state.json ] && git add data/price-alert-state.json || true
           [ -f data/whatsapp-alert-failures.json ] && git add data/whatsapp-alert-failures.json || true
           [ -f docs/data/price-alert-state.json ] && git add docs/data/price-alert-state.json || true
           [ -f docs/data/whatsapp-alert-failures.json ] && git add docs/data/whatsapp-alert-failures.json || true
-          git add -A -- data/pg-write-failures.json 2>/dev/null || true
+          # Cola de Postgres (issue #104) -- lo único nuevo que este repo
+          # commitea que scrape-frequent.yml del privado no tenía.
+          [ -f data/pg-write-queue.json ] && git add data/pg-write-queue.json || true
           git diff --cached --quiet && echo "Sin cambios" && exit 0
           git commit -m "Actualiza precios (sin WhatsApp) $(date -u +%Y-%m-%dT%H:%M:%SZ)"
           git pull --rebase || { git rebase --abort; echo "Rebase falló, se reintenta en la próxima corrida"; exit 1; }
           git push
-
