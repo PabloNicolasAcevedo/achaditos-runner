@@ -1,48 +1,11 @@
 name: Scrape Brazilian product prices
 
-# REPO RUNNER PÚBLICO (issue #104 del repo privado): este repo existe SOLO
-# para ejecutar los crons de scraping con los minutos ilimitados que GitHub
-# da a los repos públicos. No tiene código de negocio: hace checkout del
-# repo privado (PabloNicolasAcevedo/brasil-precios-ba) con un PAT de solo
-# ese repo (secret PRIVATE_REPO_TOKEN) y corre los mismos pasos que corría
-# el workflow original ahí. Uso legítimo de automatización de un negocio
-# real, no minute-farming.
-#
-# DIFERENCIA DELIBERADA con el scrape.yml original del repo privado: acá NO
-# se pasa WHATSAPP_SESSION_PASSPHRASE. Todo lo que toca la sesión de
-# WhatsApp (alertas, sesión encriptada, passphrase) se queda en los
-# workflows del repo privado -- postPriceAlerts.js detecta la ausencia de
-# la passphrase y se saltea el envío SIN persistir estado, y el workflow
-# retry-whatsapp-alerts.yml del repo privado (corre cada 30 min con
-# early-exit barato) levanta y envía esas alertas a los pocos minutos.
-#
-# ARQUITECTURA HÍBRIDA (issue #104, 2026-07-21): este repo tampoco conecta a
-# Postgres -- runners de repos públicos de GitHub reciben (EAUTHQUERY)/
-# (ECIRCUITBREAKER) persistentes del pooler de Supabase, descartado todo lo
-# demás (credenciales, puerto, red, restricciones de Supabase, confirmado
-# con 10+ corridas de prueba). QUEUE_PG_WRITES=1 hace que lib/store.js
-# encole rows/runsMeta en data/pg-write-queue.json en vez de escribir
-# directo -- el workflow sync-runner-data-to-pg.yml del repo PRIVADO
-# (conexión ya probada) lo reproduce apenas ve ese archivo en un push, y ahí
-# también viven ahora purgeBlocklistedSkus/quarantineZombieSkus/
-# syncImagesToR2/build-snapshot/sync-catalog/sync-matching y los 4 chequeos
-# de salud -- todos necesitan Postgres directo, ninguno puede correr acá.
-#
-# Si se cambia un cron acá: actualizar web/lib/admin/scrapeSchedule.ts del
-# repo privado (panel "Próxima corrida" de /admin/scrapers) -- espeja estos
-# horarios a mano.
-
 on:
   schedule:
-    # UTC times chosen so runs land at ~06:20 and ~18:20 Argentina time (ART = UTC-3).
-    # Minute offset (:17, not :00) to avoid GitHub's known top-of-hour scheduling congestion.
     - cron: "17 9 * * *"
     - cron: "17 21 * * *"
   workflow_dispatch: {}
 
-# Permisos del GITHUB_TOKEN de ESTE repo (el público) -- no se usa para
-# nada: el push de datos va al repo privado vía PRIVATE_REPO_TOKEN. Read-only
-# a propósito.
 permissions:
   contents: read
 
@@ -69,9 +32,6 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # SKIP_WHATSAPP + RUN_KIND=full: mismos flags y motivos que el
-      # workflow original -- ver el comentario largo en
-      # .github/workflows/scrape.yml del repo privado (2026-07-21).
       - name: Run scraper
         env:
           SKIP_WHATSAPP: "1"
@@ -79,9 +39,7 @@ jobs:
           QUEUE_PG_WRITES: "1"
         run: node index.js
 
-      # Issue #90-CSV: data/prices.csv es append-only y tiene límite duro de
-      # GitHub de 100MB -- ver scripts/rotatePricesCsv.js.
-      - name: Rotar historial de precios si el CSV activo creció demasiado
+      - name: Rotate price history if active CSV grew too large
         run: node scripts/rotatePricesCsv.js
 
       - name: Commit results
@@ -99,7 +57,7 @@ jobs:
           [ -f docs/data/price-alert-state.json ] && git add docs/data/price-alert-state.json || true
           [ -f docs/data/whatsapp-alert-failures.json ] && git add docs/data/whatsapp-alert-failures.json || true
           [ -f data/pg-write-queue.json ] && git add data/pg-write-queue.json || true
-          git diff --cached --quiet && echo "Sin cambios" && exit 0
+          git diff --cached --quiet && echo "No changes" && exit 0
           git commit -m "Actualiza precios $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          git pull --rebase || { git rebase --abort; echo "Rebase falló, se reintenta en la próxima corrida"; exit 1; }
+          git pull --rebase || { git rebase --abort; echo "Rebase failed, will retry next run"; exit 1; }
           git push

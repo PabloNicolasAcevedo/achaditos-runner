@@ -1,30 +1,12 @@
 name: Scrape prices (sin WhatsApp, mas frecuente)
 
-# REPO RUNNER PÚBLICO -- ver el header de scrape.yml en este mismo repo para
-# el porqué de este repo y el patrón checkout-del-privado. Este workflow es
-# el subconjunto frecuente (5 corridas/día, sin WhatsApp ni snapshot del
-# sitio): precios/stock más frescos entre corridas completas.
-#
-# ARQUITECTURA HÍBRIDA (issue #104, 2026-07-21): este repo NO conecta a
-# Postgres -- runners de repos públicos de GitHub reciben (EAUTHQUERY)/
-# (ECIRCUITBREAKER) persistentes del pooler de Supabase, descartado todo lo
-# demás (credenciales, puerto, red, restricciones de Supabase). En vez de
-# eso, QUEUE_PG_WRITES=1 hace que lib/store.js encole rows/runsMeta en
-# data/pg-write-queue.json, que se commitea igual que el resto -- el
-# workflow sync-runner-data-to-pg.yml del repo PRIVADO lo reproduce ahí
-# (conexión ya probada) apenas ve ese archivo en un push.
-#
-# Si se cambia un cron acá: actualizar web/lib/admin/scrapeSchedule.ts del
-# repo privado (panel "Próxima corrida" de /admin/scrapers).
-
 on:
   schedule:
-    # UTC = ART + 3. Minuto :17 para evitar la congestion de en punto de GitHub.
-    - cron: "17 10 * * *" # ~07:17 ART
-    - cron: "17 14 * * *" # ~11:17 ART
-    - cron: "17 18 * * *" # ~15:17 ART
-    - cron: "17 22 * * *" # ~19:17 ART
-    - cron: "17 0 * * *"  # ~21:17 ART
+    - cron: "17 10 * * *"
+    - cron: "17 14 * * *"
+    - cron: "17 18 * * *"
+    - cron: "17 22 * * *"
+    - cron: "17 0 * * *"
   workflow_dispatch: {}
 
 permissions:
@@ -53,22 +35,13 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # Sin PGHOST/PGPORT/etc acá a propósito -- QUEUE_PG_WRITES=1 encola en
-      # vez de intentar conectar (ver header). Los chequeos de salud que
-      # necesitan Postgres (checkPgHealth/checkScraperHealth/
-      # checkDataAnomalies) se movieron al workflow del repo privado.
-      # purgeBlocklistedSkus.js / quarantineZombieSkus.js NO están acá --
-      # necesitan conexión DIRECTA a Postgres (no pasan por la cola de
-      # QUEUE_PG_WRITES), así que fallarían igual que el resto. Se movieron
-      # al workflow sync-runner-data-to-pg.yml del repo privado.
       - name: Run scraper (sin WhatsApp)
         env:
           SKIP_WHATSAPP: "1"
           QUEUE_PG_WRITES: "1"
         run: node index.js
 
-      # Issue #90-CSV: ver scripts/rotatePricesCsv.js (límite duro 100MB).
-      - name: Rotar historial de precios si el CSV activo creció demasiado
+      - name: Rotate price history if active CSV grew too large
         run: node scripts/rotatePricesCsv.js
 
       - name: Commit results
@@ -85,10 +58,8 @@ jobs:
           [ -f data/whatsapp-alert-failures.json ] && git add data/whatsapp-alert-failures.json || true
           [ -f docs/data/price-alert-state.json ] && git add docs/data/price-alert-state.json || true
           [ -f docs/data/whatsapp-alert-failures.json ] && git add docs/data/whatsapp-alert-failures.json || true
-          # Cola de Postgres (issue #104) -- lo único nuevo que este repo
-          # commitea que scrape-frequent.yml del privado no tenía.
           [ -f data/pg-write-queue.json ] && git add data/pg-write-queue.json || true
-          git diff --cached --quiet && echo "Sin cambios" && exit 0
+          git diff --cached --quiet && echo "No changes" && exit 0
           git commit -m "Actualiza precios (sin WhatsApp) $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          git pull --rebase || { git rebase --abort; echo "Rebase falló, se reintenta en la próxima corrida"; exit 1; }
+          git pull --rebase || { git rebase --abort; echo "Rebase failed, will retry next run"; exit 1; }
           git push
