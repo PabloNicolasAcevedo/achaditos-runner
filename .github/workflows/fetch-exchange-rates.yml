@@ -1,0 +1,60 @@
+name: Fetch cotizacion BRL/ARS
+
+on:
+  schedule:
+    - cron: "23 11,13,15,17,19,21,23,1 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fetch-exchange-rates
+  cancel-in-progress: false
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: PabloNicolasAcevedo/brasil-precios-ba
+          token: ${{ secrets.PRIVATE_REPO_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Cache de Chromium
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/puppeteer
+          key: puppeteer-chrome-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+
+      - name: Instalar Chromium
+        run: npx puppeteer browsers install chrome
+
+      - name: Cotizacion AstroPay
+        continue-on-error: true
+        env:
+          RATES_OUTFILE: /tmp/rates.json
+        run: node scripts/fetchAstropayRate.js
+
+      - name: Cotizacion Bitso
+        continue-on-error: true
+        env:
+          RATES_OUTFILE: /tmp/rates.json
+        run: node scripts/fetchBitsoRate.js
+
+      - name: Publicar cotizaciones
+        env:
+          RATES_OUTFILE: /tmp/rates.json
+          PG_INGEST_URL: ${{ secrets.PG_INGEST_URL }}
+          PG_INGEST_TOKEN: ${{ secrets.PG_INGEST_TOKEN }}
+        run: node scripts/postExchangeRates.js
