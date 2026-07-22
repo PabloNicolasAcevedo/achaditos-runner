@@ -1,0 +1,61 @@
+name: Reintenta alertas de WhatsApp
+
+on:
+  schedule:
+    - cron: "7 */4 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scrape-brasil-precios
+  cancel-in-progress: false
+
+jobs:
+  retry:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: PabloNicolasAcevedo/brasil-precios-ba
+          token: ${{ secrets.PRIVATE_REPO_TOKEN }}
+
+      - name: Hay algo pendiente
+        id: check
+        run: node scripts/checkPendingAlerts.js
+
+      - uses: actions/setup-node@v4
+        if: steps.check.outputs.pending == 'true'
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        if: steps.check.outputs.pending == 'true'
+        run: npm ci
+
+      - name: Reintentar alertas pendientes
+        if: steps.check.outputs.pending == 'true'
+        env:
+          WHATSAPP_SESSION_PASSPHRASE: ${{ secrets.WHATSAPP_SESSION_PASSPHRASE }}
+        run: node scripts/postPriceAlerts.js
+
+      - name: Commit results
+        if: steps.check.outputs.pending == 'true'
+        run: |
+          git config user.name "brasil-precios-bot"
+          git config user.email "actions@users.noreply.github.com"
+          [ -f data/price-alert-state.json ] && git add data/price-alert-state.json || true
+          [ -f data/whatsapp-alert-failures.json ] && git add data/whatsapp-alert-failures.json || true
+          [ -f data/whatsapp-connect-log.json ] && git add data/whatsapp-connect-log.json || true
+          [ -f data/whatsapp-session.enc ] && git add data/whatsapp-session.enc || true
+          [ -f docs/data/price-alert-state.json ] && git add docs/data/price-alert-state.json || true
+          [ -f docs/data/whatsapp-alert-failures.json ] && git add docs/data/whatsapp-alert-failures.json || true
+          [ -f docs/data/whatsapp-connect-log.json ] && git add docs/data/whatsapp-connect-log.json || true
+          git diff --cached --quiet && echo "Sin cambios" && exit 0
+          git commit -m "Reintenta alertas de WhatsApp $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          git pull --rebase || { git rebase --abort; echo "Rebase fallo, se reintenta en el proximo tick"; exit 1; }
+          git push
