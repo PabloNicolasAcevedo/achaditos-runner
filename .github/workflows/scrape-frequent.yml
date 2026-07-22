@@ -62,6 +62,7 @@ jobs:
           [ -f docs/data/price-alert-state.json ] && git add docs/data/price-alert-state.json || true
           [ -f docs/data/whatsapp-alert-failures.json ] && git add docs/data/whatsapp-alert-failures.json || true
           [ -f data/pg-write-queue.json ] && git add data/pg-write-queue.json || true
+          git add -A -- data/pg-ingest-failures.json 2>/dev/null || true
           git diff --cached --quiet && echo "No changes" && exit 0
           git commit -m "Actualiza precios (sin WhatsApp) $(date -u +%Y-%m-%dT%H:%M:%SZ)"
           git pull --rebase || { git rebase --abort; echo "Rebase failed, will retry next run"; exit 1; }
