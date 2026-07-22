@@ -39,6 +39,9 @@ jobs:
         env:
           SKIP_WHATSAPP: "1"
           QUEUE_PG_WRITES: "1"
+          PG_INGEST_URL: ${{ secrets.PG_INGEST_URL }}
+          PG_INGEST_TOKEN: ${{ secrets.PG_INGEST_TOKEN }}
+          EXCHANGE_RATE_URL: ${{ secrets.EXCHANGE_RATE_URL }}
         run: node index.js
 
       - name: Rotate price history if active CSV grew too large
