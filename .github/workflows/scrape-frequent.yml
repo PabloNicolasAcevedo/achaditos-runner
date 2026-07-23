@@ -48,9 +48,4 @@ jobs:
         run: |
           git config user.name "brasil-precios-bot"
           git config user.email "actions@users.noreply.github.com"
-          [ -f data/pg-write-queue.json ] && git add data/pg-write-queue.json || true
-          git add -A -- data/pg-ingest-failures.json 2>/dev/null || true
-          git diff --cached --quiet && echo "No changes" && exit 0
-          git commit -m "Actualiza estado de ingesta (sin WhatsApp) $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          git pull --rebase || { git rebase --abort; echo "Rebase failed, will retry next run"; exit 1; }
-          git push
+          bash scripts/commitIngestState.sh "Actualiza estado de ingesta (sin WhatsApp) $(date -u +%Y-%m-%dT%H:%M:%SZ)"
