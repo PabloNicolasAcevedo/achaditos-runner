@@ -52,9 +52,6 @@ jobs:
           [ -f data/whatsapp-alert-failures.json ] && git add data/whatsapp-alert-failures.json || true
           [ -f data/whatsapp-connect-log.json ] && git add data/whatsapp-connect-log.json || true
           [ -f data/whatsapp-session.enc ] && git add data/whatsapp-session.enc || true
-          [ -f docs/data/price-alert-state.json ] && git add docs/data/price-alert-state.json || true
-          [ -f docs/data/whatsapp-alert-failures.json ] && git add docs/data/whatsapp-alert-failures.json || true
-          [ -f docs/data/whatsapp-connect-log.json ] && git add docs/data/whatsapp-connect-log.json || true
           git diff --cached --quiet && echo "Sin cambios" && exit 0
           git commit -m "Reintenta alertas de WhatsApp $(date -u +%Y-%m-%dT%H:%M:%SZ)"
           git pull --rebase || { git rebase --abort; echo "Rebase fallo, se reintenta en el proximo tick"; exit 1; }
