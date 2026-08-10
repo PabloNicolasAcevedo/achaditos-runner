@@ -21,12 +21,7 @@ on:
     - cron: "17 23 * * *"
     - cron: "17 0 * * *"
     - cron: "17 1 * * *"
-  workflow_dispatch:
-    inputs:
-      force_fail:
-        description: "Test temporal issue #86: fallar rápido antes del scrape real para probar el heartbeat"
-        type: boolean
-        default: false
+  workflow_dispatch: {}
 
 permissions:
   contents: read
@@ -44,12 +39,6 @@ jobs:
         with:
           repository: PabloNicolasAcevedo/brasil-precios-ba
           token: ${{ secrets.PRIVATE_REPO_TOKEN }}
-
-      - name: Test temporal issue #86 -- fallar rápido si se pidió
-        if: ${{ inputs.force_fail == true }}
-        run: |
-          echo "Fallando a propósito para probar el heartbeat de issue #86."
-          exit 1
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
