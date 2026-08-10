@@ -18,7 +18,12 @@ name: Chequear expiración de PRIVATE_REPO_TOKEN
 on:
   schedule:
     - cron: "13 12 * * *" # una vez al día, ~09:13 ART
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      force_test:
+        description: "Forzar días restantes bajos para probar que el token puede crear el issue de aviso (test, no afecta el cron real)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -31,6 +36,7 @@ jobs:
       - name: Chequear expiración y avisar en el repo privado si corresponde
         env:
           PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+          FORCE_TEST: ${{ inputs.force_test }}
         run: |
           set -e
           RES=$(curl -sS -D headers.txt -o /dev/null -w "%{http_code}" \
@@ -50,6 +56,10 @@ jobs:
           NOW_EPOCH=$(date +%s)
           EXP_EPOCH=$(date -d "$EXP" +%s)
           DAYS_LEFT=$(( (EXP_EPOCH - NOW_EPOCH) / 86400 ))
+          if [ "$FORCE_TEST" = "true" ]; then
+            echo "FORCE_TEST activo -- forzando DAYS_LEFT=5 para probar el camino de creación del issue."
+            DAYS_LEFT=5
+          fi
           echo "Días restantes: $DAYS_LEFT"
 
           LABEL="pat-expiring"
