@@ -2,11 +2,25 @@ name: Scrape prices (sin WhatsApp, mas frecuente)
 
 on:
   schedule:
+    # Issue #121: de 5x/día a cada hora en horario de uso ART (~07-22 ART =
+    # 10-23,0-1 UTC), ahora que el runner público no tiene límite práctico de
+    # minutos (issue #119). Sin cambios en el repo privado.
     - cron: "17 10 * * *"
+    - cron: "17 11 * * *"
+    - cron: "17 12 * * *"
+    - cron: "17 13 * * *"
     - cron: "17 14 * * *"
+    - cron: "17 15 * * *"
+    - cron: "17 16 * * *"
+    - cron: "17 17 * * *"
     - cron: "17 18 * * *"
+    - cron: "17 19 * * *"
+    - cron: "17 20 * * *"
+    - cron: "17 21 * * *"
     - cron: "17 22 * * *"
+    - cron: "17 23 * * *"
     - cron: "17 0 * * *"
+    - cron: "17 1 * * *"
   workflow_dispatch: {}
 
 permissions:
