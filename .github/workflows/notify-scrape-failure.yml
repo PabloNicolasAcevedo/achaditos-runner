@@ -1,0 +1,50 @@
+name: Avisar si un scrape falla o muere antes de index.js
+
+# Issue #86: hasta ahora, toda la observabilidad del pipeline dependía de que
+# index.js llegara a ejecutarse (escribe scrape_runs, y de ahí salen todos
+# los demás chequeos). Si el job muere ANTES (falla npm ci, timeout, runner
+# caído), no queda ningún rastro propio -- solo el email default de GitHub
+# al último committer, fácil de perder. Este workflow escucha el resultado
+# de scrape.yml/scrape-frequent.yml sea cual sea (éxito o no) y avisa por el
+# canal real (email/in-app en /admin), no por el email de GitHub.
+#
+# Sin acceso directo a Postgres/Resend desde acá (el pooler de Supabase
+# banea IPs de runners públicos, ver docs-plan/RUNNER-PUBLICO.md en el repo
+# privado) -- se reusa el mismo canal que ya existe para todo lo demás:
+# POST autenticado a /api/ingest/runner en Vercel, con los secrets que este
+# repo YA tiene (PG_INGEST_TOKEN/PG_INGEST_URL, issue #119). Sin secrets
+# nuevos.
+
+on:
+  workflow_run:
+    workflows:
+      - "Scrape Brazilian product prices"
+      - "Scrape prices (sin WhatsApp, mas frecuente)"
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Avisar al endpoint de ingesta
+        env:
+          PG_INGEST_URL: ${{ secrets.PG_INGEST_URL }}
+          PG_INGEST_TOKEN: ${{ secrets.PG_INGEST_TOKEN }}
+          WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          set -e
+          if [ "$CONCLUSION" = "success" ]; then
+            BODY=$(node -e "console.log(JSON.stringify({kind:'workflow_succeeded', workflow: process.env.WORKFLOW_NAME}))")
+          else
+            BODY=$(node -e "console.log(JSON.stringify({kind:'workflow_failed', workflow: process.env.WORKFLOW_NAME, conclusion: process.env.CONCLUSION, runUrl: process.env.RUN_URL}))")
+          fi
+          curl -sS -o /dev/null -w "%{http_code}\n" -X POST "$PG_INGEST_URL" \
+            -H "Authorization: Bearer $PG_INGEST_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$BODY"
