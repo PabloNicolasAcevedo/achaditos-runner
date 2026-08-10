@@ -1,0 +1,82 @@
+name: Chequear expiración de PRIVATE_REPO_TOKEN
+
+# Issue #116, punto 4: PRIVATE_REPO_TOKEN es un fine-grained PAT (~1 año de
+# vida) que sostiene TODO el dispatch runner->privado (checkout + push en
+# scrape.yml/scrape-frequent.yml/retry-whatsapp-alerts.yml/
+# fetch-exchange-rates.yml). Si expira en silencio, las 4 corridas empiezan a
+# fallar en el paso de checkout sin ningún aviso previo.
+#
+# GitHub devuelve la fecha de expiración de cualquier PAT fine-grained en el
+# header `github-authentication-token-expiration` de cualquier respuesta
+# autenticada -- /rate_limit es gratis (no cuenta contra el rate limit).
+#
+# El aviso se abre como issue en el repo PRIVADO (no acá, en el público
+# achaditos-runner) -- mismo criterio que checkAlertHealth.js/
+# checkPgHealth.js (issue #104): este repo es de bajo tráfico visual, nadie
+# lo mira todos los días.
+
+on:
+  schedule:
+    - cron: "13 12 * * *" # una vez al día, ~09:13 ART
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Chequear expiración y avisar en el repo privado si corresponde
+        env:
+          PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+        run: |
+          set -e
+          RES=$(curl -sS -D headers.txt -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer $PRIVATE_REPO_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/rate_limit)
+          if [ "$RES" != "200" ]; then
+            echo "rate_limit devolvió $RES, no se puede chequear expiración."
+            exit 0
+          fi
+          EXP=$(grep -i "^github-authentication-token-expiration:" headers.txt | cut -d' ' -f2- | tr -d '\r')
+          if [ -z "$EXP" ]; then
+            echo "Sin header de expiración (classic PAT o token sin vencimiento) -- nada que vigilar."
+            exit 0
+          fi
+          echo "PRIVATE_REPO_TOKEN expira: $EXP"
+          NOW_EPOCH=$(date +%s)
+          EXP_EPOCH=$(date -d "$EXP" +%s)
+          DAYS_LEFT=$(( (EXP_EPOCH - NOW_EPOCH) / 86400 ))
+          echo "Días restantes: $DAYS_LEFT"
+
+          LABEL="pat-expiring"
+          REPO="PabloNicolasAcevedo/brasil-precios-ba"
+          API="https://api.github.com/repos/$REPO"
+          AUTH_HDR="Authorization: Bearer $PRIVATE_REPO_TOKEN"
+
+          EXISTING=$(curl -sS -H "$AUTH_HDR" -H "Accept: application/vnd.github+json" \
+            "$API/issues?labels=$LABEL&state=open" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{const a=JSON.parse(d);console.log(a[0]?a[0].number:'')}catch{console.log('')}})")
+
+          if [ "$DAYS_LEFT" -gt 30 ]; then
+            if [ -n "$EXISTING" ]; then
+              curl -sS -X PATCH -H "$AUTH_HDR" -H "Accept: application/vnd.github+json" \
+                "$API/issues/$EXISTING" -d '{"state":"closed"}' > /dev/null
+              echo "Issue #$EXISTING cerrado (PRIVATE_REPO_TOKEN ya no está por vencer)."
+            fi
+            exit 0
+          fi
+
+          BODY="PRIVATE_REPO_TOKEN vence el $EXP (~$DAYS_LEFT días). Este token sostiene el checkout/push de las 4 corridas programadas en achaditos-runner (scrape, scrape-frequent, retry-whatsapp-alerts, fetch-exchange-rates). Generar un nuevo fine-grained PAT con los mismos permisos (Contents: write, scoped a este repo) y actualizar el secret PRIVATE_REPO_TOKEN en https://github.com/PabloNicolasAcevedo/achaditos-runner/settings/secrets/actions antes de esa fecha."
+
+          if [ -n "$EXISTING" ]; then
+            curl -sS -X PATCH -H "$AUTH_HDR" -H "Accept: application/vnd.github+json" \
+              "$API/issues/$EXISTING" -d "$(node -e "console.log(JSON.stringify({body: process.argv[1]}))" "$BODY")" > /dev/null
+            echo "Issue #$EXISTING actualizado."
+          else
+            RES_CREATE=$(curl -sS -X POST -H "$AUTH_HDR" -H "Accept: application/vnd.github+json" \
+              "$API/issues" -d "$(node -e "console.log(JSON.stringify({title: 'PRIVATE_REPO_TOKEN vence en '+process.argv[1]+' días', body: process.argv[2], labels: [process.argv[3]]}))" "$DAYS_LEFT" "$BODY" "$LABEL")")
+            echo "Creado: $RES_CREATE" | head -c 500
+          fi
