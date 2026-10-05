@@ -9,15 +9,24 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Probar Neway desde GitHub
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+      - name: Probar Neway con el fetch de Node (igual que odooShop.js)
         run: |
-          UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36'
-          curl -s ifconfig.io/country_code || true
-          for u in https://www.newaymarket.com/shop https://www.newaymarket.com/shop/page/2; do
-            echo "=== $u"
-            curl -s -L -o page.html -D headers.txt -w 'final=%{url_effective} code=%{http_code} size=%{size_download}\n' -A "$UA" -H 'Accept-Language: es-AR,es;q=0.9' "$u"
-            grep -iE '^(HTTP|location|server|cf-|set-cookie|content-type)' headers.txt | cut -c1-200
-            echo "oe_product: $(grep -o 'class="oe_product ' page.html | wc -l)  cb-name: $(grep -o 'cb-prod-card__name' page.html | wc -l)"
-            grep -o '<title>[^<]*' page.html | head -2
-            sed -e 's/<[^>]*>/ /g' page.html | tr -s ' \n' | grep -v '^\s*$' | head -c 1500; echo
-          done
+          cat > p.js <<'JS'
+          const H = { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36", "Accept-Language": "es-AR,es;q=0.9" };
+          (async () => {
+            for (const u of ["https://www.newaymarket.com/shop", "https://www.newaymarket.com/shop/page/2"]) {
+              const r = await fetch(u, { headers: H });
+              const t = await r.text();
+              console.log("===", u, "->", r.status, r.url, t.length, "bytes");
+              for (const [k, v] of r.headers) if (/server|cf-|location|content-type|set-cookie/i.test(k)) console.log("  ", k, v.slice(0, 150));
+              console.log("  oe_product:", (t.match(/class="oe_product /g) || []).length, "cb-name:", (t.match(/cb-prod-card__name/g) || []).length, "currency:", (t.match(/oe_currency_value/g) || []).length);
+              console.log("  title:", (t.match(/<title>([^<]*)/) || [])[1]);
+              const i = t.indexOf('class="oe_product ');
+              console.log("  card:", i >= 0 ? t.slice(i, i + 1500).replace(/\s+/g, " ") : t.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").slice(0, 1500));
+            }
+          })();
+          JS
+          node p.js
