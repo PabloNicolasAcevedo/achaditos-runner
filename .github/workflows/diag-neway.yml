@@ -7,26 +7,31 @@ permissions:
 jobs:
   diag:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 8
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
+        with:
+          repository: PabloNicolasAcevedo/brasil-precios-ba
+          token: ${{ secrets.PRIVATE_REPO_TOKEN }}
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 20
-      - name: Probar Neway con el fetch de Node (igual que odooShop.js)
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci
+      - name: Scraper real de Neway
         run: |
-          cat > p.js <<'JS'
+          git log --oneline -3
+          grep -n "cb-prod-card\|Accept-Language" scrapers/odooShop.js | head
+          cat > d.js <<'JS'
+          const o = require("./scrapers/odooShop");
           const H = { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36", "Accept-Language": "es-AR,es;q=0.9" };
           (async () => {
-            for (const u of ["https://www.newaymarket.com/shop", "https://www.newaymarket.com/shop/page/2"]) {
-              const r = await fetch(u, { headers: H });
-              const t = await r.text();
-              console.log("===", u, "->", r.status, r.url, t.length, "bytes");
-              for (const [k, v] of r.headers) if (/server|cf-|location|content-type|set-cookie/i.test(k)) console.log("  ", k, v.slice(0, 150));
-              console.log("  oe_product:", (t.match(/class="oe_product /g) || []).length, "cb-name:", (t.match(/cb-prod-card__name/g) || []).length, "currency:", (t.match(/oe_currency_value/g) || []).length);
-              console.log("  title:", (t.match(/<title>([^<]*)/) || [])[1]);
-              const i = t.indexOf('class="oe_product ');
-              console.log("  card:", i >= 0 ? t.slice(i, i + 1500).replace(/\s+/g, " ") : t.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").slice(0, 1500));
-            }
-          })();
+            const t = await (await fetch("https://www.newaymarket.com/shop", { headers: H })).text();
+            const items = o.parseListingPage(t, "https://www.newaymarket.com");
+            console.log("parseListingPage directo:", items.length, JSON.stringify(items[0]));
+            const all = await require("./scrapers/newaymarket").run();
+            console.log("run():", all.length);
+          })().catch((e) => console.log("ERROR", e));
           JS
-          node p.js
+          node d.js
